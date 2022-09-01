@@ -1,0 +1,17 @@
+data:
+  home: data
+
+
+model:
+  batch_size: 2
+  code_embed_dim: 256
+  com_embed_dim: 256
+  edge_embed_dim: 256
+  hidden_dim: 256
+  hops: 3
+  num_layers: 2
+  max_code_len: 256
+  max_com_len: 20
+
+
+

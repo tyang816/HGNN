@@ -1,0 +1,4 @@
+[ZoneTransfer]
+ZoneId=3
+ReferrerUrl=https://github.com/microsoft/CodeBERT/blob/master/GraphCodeBERT/translation/parser/my-languages.so
+HostUrl=https://raw.githubusercontent.com/microsoft/CodeBERT/master/GraphCodeBERT/translation/parser/my-languages.so
