@@ -11,7 +11,7 @@ model:
   hops: 3
   num_layers: 2
   max_code_len: 256
-  max_com_len: 20
+  max_nl_len: 20
 
 
 

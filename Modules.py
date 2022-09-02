@@ -8,57 +8,6 @@ import math
 from collections import namedtuple
 
 
-class GlobalAttention(nn.Module):
-    ''' Multiplicative and additive global attention.
-        shape of query: [batch_size, units]
-        shape of key: [batch_size, max_steps, key_dim]
-        shape of context: [batch_size, units]
-        shape of alignments: [batch_size, max_steps]
-        style should be either "add" or "mul"'''
-
-    def __init__(self, units, key_dim=None, style='mul', scale=True):
-        super(GlobalAttention, self).__init__()
-        self.style = style
-        self.scale = scale
-        key_dim = key_dim or units
-
-        self.Wk = nn.Linear(key_dim, units, bias=False)
-        if self.style == 'mul':
-            if self.scale:
-                self.v = nn.Parameter(torch.tensor(1.))
-        elif self.style == 'add':
-            self.Wq = nn.Linear(units, units)
-            self.v = nn.Parameter(torch.ones(units))
-        else:
-            raise ValueError(str(style) + ' is not an appropriate attention style.')
-
-    def score(self, query, key):
-        query = query.unsqueeze(1)  # batch_size * 1 * units
-        key = self.Wk(key)
-
-        if self.style == 'mul':
-            output = torch.bmm(query, key.transpose(1, 2))
-            output = output.squeeze(1)
-            if self.scale:
-                output = self.v * output
-        else:
-            output = torch.sum(self.v * torch.tanh(self.Wq(query) + key), 2)
-        return output
-
-    def forward(self, query, key, memory_lengths=None, custom_mask=None):
-        score = self.score(query, key)  # batch_size * max_steps
-        if memory_lengths is not None:
-            score_mask = sequence_mask(memory_lengths, key.shape[1])
-            score.masked_fill_(~score_mask, float('-inf'))
-        elif custom_mask is not None:
-            score.masked_fill_(~custom_mask, float('-inf'))
-
-        alignments = F.softmax(score, 1)
-        context = torch.bmm(alignments.unsqueeze(1), key)  # batch_size * 1 * units
-        context = context.squeeze(1)
-        return context, alignments
-
-
 class StaticMsgPass(MessagePassing):
     def __init__(self):
         super(StaticMsgPass, self).__init__(aggr='add')
@@ -98,6 +47,7 @@ class DynamicMsgPass(MessagePassing):
         end = int(ptr[idx + 1])
         d = q.shape[1]
         for node_id in range(node_num):
+            # because the edge is directionless, each `key` of a node has different hidden value
             # [1, hidden_dim] x [hidden_dim, node_num]
             A[node_id, start: end] = (q[node_id].unsqueeze(0) @ k[node_id].transpose(0, 1)).squeeze(0)[
                                      start: end] / math.sqrt(d)
@@ -154,7 +104,7 @@ class Encoder(nn.Module):
         self.hops = hops
         self.hidden_dim = hidden_dim
         self.CodeEmbedding = nn.Embedding(code_vocab_size, code_embed_dim, padding_idx=pad_id)
-        self.BiLSTM = nn.LSTM(hidden_dim, 128, bidirectional=True)
+        self.BiLSTM = nn.LSTM(hidden_dim, 128, bidirectional=True, batch_first=True)
         self.ComEembedding = nn.Embedding(com_vocab_size, com_embed_dim)
         self.EdgeEmbedding = nn.Embedding(2, edge_embed_dim)
         self.W_C = nn.Linear(hidden_dim, hidden_dim, bias=False)
@@ -222,106 +172,83 @@ class Encoder(nn.Module):
         for graph_id in range(batch_size):
             start = ptr[graph_id]
             end = ptr[graph_id + 1]
+
             graph_rep = graph_reps[graph_id].unsqueeze(0)
             h_n = hn[graph_id].unsqueeze(0)
             z_ = torch.cat((graph_rep, h_n, graph_rep * h_n, graph_rep - h_n), dim=-1)
             z = self.Sigmoid(self.W_z(z_))
             dec_init = z * graph_rep + (1 - z) * h_n
+
             enc_out = torch.cat((h[graph_id], f_v_k[start: end]), dim=0)
-            graph_enc_outs.append((enc_out, dec_init))
-        # graph_enc_outs: ([batch_size, node_num + com_len, hidden_dim], [1, hidden_dim])
-        print(graph_enc_outs[0][0].shape, graph_enc_outs[0][1].shape)
+            graph_enc_outs.append((enc_out, dec_init.squeeze(0)))
+        # graph_enc_outs: ([node_num + com_len, hidden_dim], [hidden_dim])
+        print(len(graph_enc_outs), graph_enc_outs[0][0].shape, graph_enc_outs[0][1].shape)
         return graph_enc_outs
 
-class DecoderCellState(
-        namedtuple('DecoderCellState',
-                   ('context', 'state', 'alignments'), defaults=[None])):
-    def batch_select(self, indices):
-        select = lambda x, dim=0: x.index_select(dim, indices)
-        return self._replace(context = select(self.context),
-                             state = tuple_map(select, self.state, dim=1),
-                             alignments = tuple_map(select, self.alignments))
 
 
-class DecoderCell(nn.Module):
-    def __init__(self, embed_dim, hidden_dim,  dropout, glob_attn, num_layers=1,
-                 memory_dim=None, input_feed=True, use_attn_layer=True):
-        super(DecoderCell, self).__init__()
-        self.glob_attn = glob_attn
-        self.input_feed = glob_attn and input_feed
-        self.use_attn_layer = glob_attn and use_attn_layer
-        self.dropout = nn.Dropout(dropout)
+class Attention(nn.Module):
+    def __init__(self, enc_hid_dim, dec_hid_dim):
+        super().__init__()
+        self.attn = nn.Linear(enc_hid_dim + dec_hid_dim, dec_hid_dim, bias=False)
+        self.v = nn.Linear(dec_hid_dim, 1, bias=False)
 
-        if memory_dim is None:
-            memory_dim = hidden_dim
-        cell_in_dim, context_dim = embed_dim, memory_dim
-        if glob_attn is not None:
-            self.attention = GlobalAttention(hidden_dim, memory_dim, glob_attn)
+    def forward(self, s, enc_output):
+        # s: [batch_size, dec_hid_dim]
+        # enc_output: [batch_size, src_len, enc_hid_dim]
+        batch_size = enc_output.shape[0]
+        src_len = enc_output.shape[1]
+        # repeat decoder hidden state src_len times
+        # s: [batch_size, src_len, dec_hid_dim]
+        # enc_output: [batch_size, src_len, enc_hid_dim]
+        s = s.unsqueeze(1).repeat(1, src_len, 1)
+        # energy: [batch_size, src_len, dec_hid_dim]
+        energy = torch.tanh(self.attn(torch.cat((s, enc_output), dim=2)))
+        # attention: [batch_size, src_len]
+        attention = self.v(energy).squeeze(2)
+        return F.softmax(attention, dim=1)
 
-            if use_attn_layer:
-                self.attn_layer = nn.Linear(context_dim + hidden_dim, hidden_dim)
-                context_dim = hidden_dim
-            if input_feed:
-                cell_in_dim += context_dim
-        self.cell = nn.LSTM(cell_in_dim, hidden_dim, num_layers, batch_first=True,
-                            dropout=dropout, bidirectional=False)
-
-    def forward(self, tgt_embed, prev_state, memory=None, src_lengths=None):
-        #        perform one decoding step
-        cell_input = self.dropout(tgt_embed)  # batch_size * embed_size
-
-        if self.glob_attn is not None:
-            if self.input_feed:
-                cell_input = torch.cat([cell_input, prev_state.context], 1).unsqueeze(1)
-                # batch_size * 1 * (embed_size + units)
-            output, state = self.cell(cell_input, prev_state.state)
-            output = output.squeeze(1)  # batch_size * units
-            context, alignments = self.attention(output, memory, src_lengths)
-            if self.use_attn_layer:
-                context = torch.cat([context, output], 1)
-                context = torch.tanh(self.attn_layer(context))
-            context = self.dropout(context)
-            return DecoderCellState(context, state, alignments)
-        else:
-            output, state = self.cell(cell_input, prev_state.state)
-            output = output.squeeze(1)
-            return DecoderCellState(output, state)
 
 class Decoder(nn.Module):
-    def __int__(self, field, embed_dim, hidden_dim, glob_attn, num_layers, dropout, **kwargs):
-        super(Decoder, self).__int__()
-        com_vocab_size = len(field.vocab)
-        pad_id = field.vocab.stoi['<pad>']
-        self.field = field
-        self.glob_attn = glob_attn
+    def __init__(self, com_field, embed_dim, hidden_dim, attention, dropout):
+        super(Decoder, self).__init__()
+        com_vocab_size = len(com_field.vocab)
+        pad_id = com_field.vocab.stoi['<pad>']
+        self.field = com_field
+        self.attention = attention
         self.hidden_dim = hidden_dim
 
         self.ComEembedding = nn.Embedding(com_vocab_size, embed_dim, padding_idx=pad_id)
-        self.OutLayer = nn.Linear(hidden_dim, com_vocab_size, bias=False)
-        self.cell = DecoderCell(embed_dim, hidden_dim, num_layers, dropout,
-                                glob_attn, **kwargs)
+        self.OutLayer = nn.Linear(embed_dim + 2 * hidden_dim, com_vocab_size)
+        self.LSTM = nn.LSTM(embed_dim + hidden_dim, hidden_dim, batch_first=True)
+        self.Dropout = nn.Dropout(dropout)
 
-    @property
-    def attn_history(self):
-        if self.cell.hybrid_mode:
-            return self.cell.attention.attn_history
-        elif self.glob_attn:
-            return 'std'
 
-    def initialize(self, enc_final):
-        init_context = torch.zeros(enc_final[0].shape[1], self.units,
-                                   device=enc_final[0].device)
-        return DecoderCellState(init_context, enc_final)
-
-    def forward(self, trg_input, enc_final, memory=None, src_lengths=None, return_contex=False):
-        # com_embed: [batch_size, com_len, hidden_dim], enc_final: [batch_size, node_num + com_len, hidden_dim]
+    def forward(self, trg_input, enc_final):
+        # batch_size = 1, trg_len = 1
+        # com_embed: [batch_size, trg_len, embed_dim]
         com_embed = self.ComEembedding(trg_input)
+        # com_embed: [batch_size, trg_len, embed_dim]
+        com_embed = self.Dropout(com_embed)
 
-        output_seqs, attn_history = [], []
-        for graph_enc in enc_final:
-            # dec_input: [node_num + com_len, hidden_dim]
-            dec_input = graph_enc[0]
-            # dec_init: [1, hidden_dim]
-            dec_init = graph_enc[1]
-
-        return
+        # dec_input: [batch_size, node_num + com_len, hidden_dim]
+        # print(f'enc {enc_final[0].shape}')
+        enc_output = enc_final[0].unsqueeze(0)
+        # dec_init: [batch_size, hidden_dim]
+        dec_init = enc_final[1].unsqueeze(0)
+        # a: [batch_size, 1, node_num + com_len]
+        a = self.attention(dec_init, enc_output).unsqueeze(1)
+        # c: [batch_size, 1, hidden_dim]
+        c = torch.bmm(a, enc_output)
+        lstm_input = torch.cat((com_embed, c), dim=-1)
+        # dec_out: [batch_size, src_len(=1), dec_hid_dim]
+        # dec_hidden: [batch_size, n_layers * num_directions, dec_hid_dim]
+        dec_out, (hn, cn) = self.LSTM(lstm_input, (dec_init.unsqueeze(0), dec_init.unsqueeze(0)))
+        # embedded: [batch_size, emb_dim]
+        embedded = com_embed.squeeze(1)
+        # dec_output: [batch_size, dec_hid_dim]
+        dec_output = dec_out.squeeze(1)
+        c = c.squeeze(1)
+        # pred: [batch_size, output_dim]
+        pred = self.OutLayer(torch.cat((dec_output, c, embedded), dim=1))
+        return pred, hn.view(-1)
