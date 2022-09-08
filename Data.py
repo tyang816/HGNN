@@ -59,29 +59,19 @@ def id2word(word_ids, field, source=None, remove_eos=True, remove_unk=False, rep
 def get_raw_data(path, dataset_name):
     assert dataset_name == 'code-docstring-corpus' or dataset_name == 'TL-CodeSum'
     data = {}
-    if dataset_name == 'code-docstring-corpus':
-        for cat in ['train', 'valid', 'test']:
-            codstring = []
-            for type in ['raw.code', 'nl.json']:
-                with open(path+dataset_name+'/clean/{}.{}'.format(cat, type), 'r') as f:
-                    lines = f.readlines()
-                    print(f"{type} {cat} {len(lines)}")
-                    if type == 'raw.code':
-                        for i in range(len(lines)):
-                            codstring.append({'code': eval(lines[i])})
-                    else:
-                        for i in range(len(lines)):
-                            codstring[i]['comment'] = eval(lines[i])
-            data[cat] = codstring
-    else:
-        for cat in ['train', 'valid', 'test']:
-            codstring = []
-            with open(path+dataset_name+f'/{cat}.json', 'r', encoding='utf-8') as f:
+    for cat in ['train', 'valid', 'test']:
+        codstring = []
+        for type in ['raw.code', 'nl.json']:
+            with open(path+dataset_name+'/{}.{}'.format(cat, type), 'r') as f:
                 lines = f.readlines()
-                for i in range(len(lines)):
-                    codstring.append({'code': json.loads(lines[i])['code'].replace('  ','\t'),
-                                      'comment': json.loads(lines[i])['comment']})
-            data[cat] = codstring
+                print(f"{type} {cat} {len(lines)}")
+                if type == 'raw.code':
+                    for i in range(len(lines)):
+                        codstring.append({'code': eval(lines[i])})
+                else:
+                    for i in range(len(lines)):
+                        codstring[i]['comment'] = eval(lines[i])
+        data[cat] = codstring
     # print(codstring)
     for cat in ['train', 'valid', 'test']:
         with open(path+dataset_name+f'.{cat}.json', 'w', encoding='utf-8') as f:
@@ -113,6 +103,20 @@ def add_value_node(node_seqs):
                 new_node_seq.append(new_node)
         new_node_seqs.append(new_node_seq)
     return new_node_seqs
+
+def ncs_pre_traverse(tree, idx):
+    # shape of return: [value_node_idx1, value_node_idx2, ...]
+    node = tree[idx]
+    result = []
+    if node.get('children'):
+        value_idx = node.get('children')[-1]
+        result.append(value_idx)
+        print(value_idx)
+        children = node.get('children')[:-1]
+        for child in children:
+            result.extend(ncs_pre_traverse(tree, child))
+    return result
+
 
 def type_pre_traverse(tree, idx, lang='java'):
     # shape of return: [(type, value, idx, children),...]
@@ -412,14 +416,13 @@ class ASTGraphDataset(InMemoryDataset):
         category = 'train'
         if lang == 'java':
             node_seqs = load(f'./data/processed/node_seqs_value/node_seqs_value_{lang}.{category}.json', is_json=False)
-            edge_seqs = load(f'./data/processed/edge/edge_{lang}.{category}.json', is_json=False)
+            edge_seqs = load(f'./data/processed/dfg_edge/edge_{lang}.{category}.json', is_json=False)
             com_seqs = load(f'./data/raw/TL-CodeSum.{category}.json', is_json=True, key='comment')
-            # com_seqs = tokenize_nl(com_seqs)
             node_type_field = torch.load('./data/field/java_node_field.pkl')
             nl_field = torch.load('./data/field/java_nl_field.pkl')
         else:
             node_seqs = load(f'./data/processed/node_seqs_value/node_seqs_value_{lang}.{category}.json', is_json=False)
-            edge_seqs = load(f'./data/processed/edge/edge_{lang}.{category}.json', is_json=False)
+            edge_seqs = load(f'./data/processed/dfg_edge/edge_{lang}.{category}.json', is_json=False)
             com_seqs = load(f'./data/raw/code-docstring-corpus.{category}.json', is_json=True, key='comment')
             node_type_field = torch.load('./data/field/python2_node_field.pkl')
             nl_field = torch.load('./data/field/python2_nl_field.pkl')
@@ -436,26 +439,33 @@ class ASTGraphDataset(InMemoryDataset):
                 if node.get('type'):
                     if node.get('children'):
                         for child in node['children']:
-                            ast_edge_index.append([node['id'], child])
-                            ast_edge_attr.append([0])
-                            ast_edge_index.append([child, node['id']])
-                            ast_edge_attr.append([0])
+                            curr_edge1 = [node['id'], child]
+                            curr_edge2 = [child, node['id']]
+                            if curr_edge1 not in ast_edge_index:
+                                ast_edge_index.append(curr_edge1)
+                                ast_edge_attr.append([1, 0, 0])
+                            elif curr_edge1 in ast_edge_index:
+                                ast_edge_attr[ast_edge_index.index(curr_edge1)][0] = 1
+                            if curr_edge2 not in ast_edge_index:
+                                ast_edge_index.append(curr_edge2)
+                                ast_edge_attr.append([1, 0, 0])
+                            elif curr_edge2 in ast_edge_index:
+                                ast_edge_attr[ast_edge_index.index(curr_edge2)][0] = 1
                     ast_node.append([node['type']])
                 # leaf node
                 else:
                     ast_node.append([node['value']])
             if dfg_edge != []:
                 for dfg in dfg_edge:
-                    ast_edge_index.append(dfg)
-                    ast_edge_attr.append([1])
-
-            # print(com)
-            if lang == 'java':
-                com = nl_filter(com)
+                    if dfg not in ast_edge_index:
+                        ast_edge_index.append(dfg)
+                        ast_edge_attr.append([0, 1, 0])
+                    elif dfg in ast_edge_index:
+                        ast_edge_attr[ast_edge_index.index(dfg)][1] = 1
             try:
                 data = Data(x=node_type_field.process(ast_node),
                             edge_index=torch.tensor(ast_edge_index, dtype=torch.long).t().contiguous(),
-                            edge_attr=torch.IntTensor(ast_edge_attr).squeeze(1),
+                            edge_attr=torch.IntTensor(ast_edge_attr),
                             y=nl_field.process([com]).squeeze(0))
                 data_list.append(data)
                 # print(data.x.shape, data.edge_index.shape, data.edge_attr.shape, data.y.shape)
@@ -479,71 +489,84 @@ def process_python2():
     return None
 
 
-def get_vocab_field():
-    codes = load(f'./data/processed/node_seqs_java.train.json', is_json=False)
-    nodes = []
-    for node_seq in tqdm(codes):
-        n = []
-        node_seq = eval(node_seq)
-        for node in node_seq:
-            n.append(node['type'])
-            if node.get('value'):
-                n.append(node['value'])
-        nodes.append(n)
-    get_vocab(nodes, is_tgt=False, save_path=f'./data/field/java_node_field.pkl')
-    a = torch.load(f'./data/field/java_node_field.pkl')
-    print(a.process([['MethodDeclaration', 'FormalParameter'], ['a', 'b']]))
-    coms = load('./data/raw/TL-CodeSum.train.json', is_json=True, key='comment')
-    texts, dropped = tokenize_nl(coms)
-    # print(texts)
-    get_vocab(texts, save_path='./data/field/java_nl_field.pkl')
+def get_vocab_field(lang):
+    assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
+    if 'java' in lang:
+        codes = load(f'./data/processed/node_seqs_java.train.json', is_json=False)
+        nodes = []
+        for node_seq in tqdm(codes):
+            n = []
+            node_seq = eval(node_seq)
+            for node in node_seq:
+                n.append(node['type'])
+                if node.get('value'):
+                    n.append(node['value'])
+            nodes.append(n)
+        get_vocab(nodes, is_tgt=False, save_path=f'./data/field/java_node_field.pkl')
+        a = torch.load(f'./data/field/java_node_field.pkl')
+        print(a.process([['MethodDeclaration', 'FormalParameter'], ['a', 'b']]))
+        coms = load('./data/raw/TL-CodeSum.train.json', is_json=True, key='comment')
+        texts = []
+        for com in coms:
+            texts.append((com))
+        get_vocab(texts, save_path='./data/field/java_nl_field.pkl')
+    if 'python2' in lang:
+        codes = load(f'./data/processed/node_seqs_python2.train.json', is_json=False)
+        nodes = []
+        for node_seq in tqdm(codes):
+            n = []
+            node_seq = eval(node_seq)
+            for node in node_seq:
+                n.append(node['type'])
+                if node.get('value'):
+                    n.append(node['value'])
+            nodes.append(n)
+        get_vocab(nodes, is_tgt=False, save_path=f'./data/field/python2_node_field.pkl')
+        a = torch.load(f'./data/field/python2_node_field.pkl')
+        print(a.process([['MethodDeclaration', 'FormalParameter'], ['a', 'b']]))
+        coms = load('./data/raw/code-docstring-corpus.train.json', is_json=True, key='comment')
+        texts = []
+        for com in coms:
+            texts.append((com))
+        get_vocab(coms, save_path='./data/field/python2_nl_field.pkl')
 
-    codes = load(f'./data/processed/node_seqs_python2.train.json', is_json=False)
-    nodes = []
-    for node_seq in tqdm(codes):
-        n = []
-        node_seq = eval(node_seq)
-        for node in node_seq:
-            n.append(node['type'])
-            if node.get('value'):
-                n.append(node['value'])
-        nodes.append(n)
-    get_vocab(nodes, is_tgt=False, save_path=f'./data/field/python2_node_field.pkl')
-    a = torch.load(f'./data/field/python2_node_field.pkl')
-    print(a.process([['MethodDeclaration', 'FormalParameter'], ['a', 'b']]))
-    coms = load('./data/raw/code-docstring-corpus.train.json', is_json=True, key='comment')
-    texts = []
-    for com in coms:
-        # print(com)
-        texts.append((com))
-    # print(texts)
-    get_vocab(coms, save_path='./data/field/python2_nl_field.pkl')
+# get data flow control
+def get_DFG(lang):
+    assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
+    if 'java' in lang:
+        for cat in ['train', 'valid', 'test']:
+            c = load(f'./data/processed/node_seqs_java.{cat}.json', is_json=False)
+            c = add_value_node(c)
+            save(c, f'./data/processed/node_seqs_value/node_seqs_value_java.{cat}.json')
+            d = get_java_DFG(c)
+            save(d, f'./data/processed/dfg_edge/edge_java.{cat}.json')
 
+    if 'python2' in lang:
+        for cat in ['train', 'valid', 'test']:
+            c_ = load(f'./data/processed/node_seqs_python2.{cat}.json', is_json=False)
+            c_ = add_value_node(c_)
+            save(c_, f'./data/processed/node_seqs_value/node_seqs_value_python2.{cat}.json')
+            d_ = get_python2_DFG(c_)
+            save(d_, f'./data/processed/dfg_edge/edge_python2.{cat}.json')
 
-def get_DFG():
-    for cat in ['train', 'valid', 'test']:
-        c = load(f'./data/processed/node_seqs_java.{cat}.json', is_json=False)
-        c = add_value_node(c)
-        save(c, f'./data/processed/node_seqs_value/node_seqs_value_java.{cat}.json')
-        d = get_java_DFG(c)
-        save(d, f'./data/processed/edge/edge_java.{cat}.json')
-
-        c_ = load(f'./data/processed/node_seqs_python2.{cat}.json', is_json=False)
-        c_ = add_value_node(c_)
-        save(c_, f'./data/processed/node_seqs_value/node_seqs_value_python2.{cat}.json')
-        d_ = get_python2_DFG(c_)
-        save(d_, f'./data/processed/edge/edge_python2.{cat}.json')
+# get natural code sequence
+# first run `get_DFG()` to get node sequences with value leaves
+def get_NCS(lang):
+    assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
+    if 'java' in lang:
+        for cat in ['train', 'valid', 'test']:
+            c = load(f'./data/processed/node_seqs_value/node_seqs_value_java.{cat}.json', is_json=False)
+            print(eval(c[0])[0])
+            break
 
 if __name__ == '__main__':
     # get_raw_data('./data/raw/', 'TL-CodeSum')
-    # get_vocab_field()
-    ast_graph = ASTGraphDataset('data')
-    print(len(ast_graph))
-    print(ast_graph[0], ast_graph[1])
-    # loader = DataLoader(ast_graph, batch_size=10, shuffle=True)
-    # print(next(iter(loader))['AST'].batch_size)
-    # f = torch.load(f'./data/field/java_nl_field.pkl')
-    # print(id2word(ast_graph[0]['AST'].y, f))
-    # print(ast_graph[0]['AST'].y)
+    # get_DFG(['java', 'python2'])
+    # get_NCS(['java'])
+    # get_vocab_field(['java'])
+    # ast_graph = ASTGraphDataset('data')
+    # print(len(ast_graph))
+    # print(ast_graph[0], ast_graph[1])
+    x = [{'id': 0, 'type': 'MethodDeclaration', 'children': [1, 2, 3, 4, 14], 'value': 'isDoubleEqual'}, {'id': 1, 'type': 'BasicType', 'children': [15], 'value': 'boolean'}, {'id': 2, 'type': 'FormalParameter', 'children': [6, 16], 'value': 'value'}, {'id': 3, 'type': 'FormalParameter', 'children': [7, 17], 'value': 'valueToCompare'}, {'id': 4, 'type': 'body', 'children': [5]}, {'id': 5, 'type': 'ReturnStatement', 'children': [8]}, {'id': 6, 'type': 'BasicType', 'children': [18], 'value': 'double'}, {'id': 7, 'type': 'BasicType', 'children': [19], 'value': 'double'}, {'id': 8, 'type': 'BinaryOperation', 'children': [9, 10, 20], 'value': '<'}, {'id': 9, 'type': 'MethodInvocation', 'children': [11, 21], 'value': 'Math.abs'}, {'id': 10, 'type': 'Literal', 'children': [22], 'value': '0.001'}, {'id': 11, 'type': 'BinaryOperation', 'children': [12, 13, 23], 'value': '-'}, {'id': 12, 'type': 'MemberReference', 'children': [24], 'value': 'value'}, {'id': 13, 'type': 'MemberReference', 'children': [25], 'value': 'valueToCompare'}, {'id': 14, 'value': 'isDoubleEqual'}, {'id': 15, 'value': 'boolean'}, {'id': 16, 'value': 'value'}, {'id': 17, 'value': 'valueToCompare'}, {'id': 18, 'value': 'double'}, {'id': 19, 'value': 'double'}, {'id': 20, 'value': '<'}, {'id': 21, 'value': 'Math.abs'}, {'id': 22, 'value': '0.001'}, {'id': 23, 'value': '-'}, {'id': 24, 'value': 'value'}, {'id': 25, 'value': 'valueToCompare'}]
 
-    # print(nl_filter(' !!!! ASSUMPTION: all VAR exists in HTTP Header must of type: APIVARREPLACE_NAME_PREFIX_HTTP_HEADER 20140310 This may be costly (O(n^2)) of the updated related # of headers; # of parameters in the requests. Better to only do it when there are some replacement in the request Parameters. a prefix : TOBE tested'))
+    print(ncs_pre_traverse(x, 0))
