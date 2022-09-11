@@ -7,7 +7,7 @@ Created on Wed Apr  8 12:55:33 2020
 
 import torch
 import torch.nn.functional as F
-from Utils import sequence_mask, sample_with_temp, tile, tuple_map
+from src.Utils import sequence_mask, sample_with_temp, tile, tuple_map
 from BeamSearch import BeamSearch
 from Data import pad, bos, eos
 
