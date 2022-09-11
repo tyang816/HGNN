@@ -314,15 +314,15 @@ def get_DFG(lang):
     assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
     if 'java' in lang:
         for cat in ['train', 'valid', 'test']:
-            c = load(f'./data/java/processed/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
+            c = load(f'./data/java/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             d = get_java_DFG(c)
-            save(d, f'./data/java/processed/dfg/dfg.{cat}.json', is_json=True)
+            save(d, f'./data/java/graph/dfg/dfg.{cat}.json', is_json=False)
 
     if 'python2' in lang:
         for cat in ['train', 'valid', 'test']:
-            c_ = load(f'./data/python2/processed/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
+            c_ = load(f'./data/python2/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             d_ = get_python2_DFG(c_)
-            save(d_, f'./data/python2/processed/dfg/dfg.{cat}.json', is_json=True)
+            save(d_, f'./data/python2/graph/dfg/dfg.{cat}.json', is_json=False)
 
 # get natural code sequence
 def ncs_pre_traverse(tree, idx):
@@ -349,7 +349,7 @@ def get_NCS(lang):
     assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
     if 'java' in lang:
         for cat in ['test', 'train', 'valid']:
-            node_seqs = load(f'./data/java/processed/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
+            node_seqs = load(f'./data/java/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             nature_code_seqs = []
             for node_seq in node_seqs:
                 # ncs: [(type, id), ...]
@@ -374,10 +374,10 @@ def get_NCS(lang):
                 for i in range(len(ncs) - 1):
                     nature_code_seq.append([ncs[i][1], ncs[i + 1][1]])
                 nature_code_seqs.append(nature_code_seq)
-            save(nature_code_seqs, f'data/java/processed/ncs/ncs.{cat}.json', is_json=True)
+            save(nature_code_seqs, f'data/java/graph/ncs/ncs.{cat}.json', is_json=False)
     elif 'python2' in lang:
         for cat in ['test', 'train', 'valid']:
-            node_seqs = load(f'./data/python2/processed/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
+            node_seqs = load(f'./data/python2/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             nature_code_seqs = []
             for node_seq in node_seqs:
                 # ncs: [(type, id), ...]
@@ -386,15 +386,10 @@ def get_NCS(lang):
                 for i in range(len(ncs) - 1):
                     nature_code_seq.append([ncs[i][1], ncs[i + 1][1]])
                 nature_code_seqs.append(nature_code_seq)
-            save(nature_code_seqs, f'data/python2/processed/ncs/ncs.{cat}.json', is_json=True)
+            save(nature_code_seqs, f'data/python2/graph/ncs/ncs.{cat}.json', is_json=False)
 
 
 if __name__ == '__main__':
     # get_node_seqs_with_value(['python2'])
-    # get_DFG(['python2'])
-    # get_NCS(['java'])
-
-    # print(len(ast_graph))
-    # print(ast_graph[0], ast_graph[1])
-    x = [{'id': 0, 'type': 'MethodDeclaration', 'children': [1, 2, 3, 4, 14], 'value': 'isDoubleEqual'}, {'id': 1, 'type': 'BasicType', 'children': [15], 'value': 'boolean'}, {'id': 2, 'type': 'FormalParameter', 'children': [6, 16], 'value': 'value'}, {'id': 3, 'type': 'FormalParameter', 'children': [7, 17], 'value': 'valueToCompare'}, {'id': 4, 'type': 'body', 'children': [5]}, {'id': 5, 'type': 'ReturnStatement', 'children': [8]}, {'id': 6, 'type': 'BasicType', 'children': [18], 'value': 'double'}, {'id': 7, 'type': 'BasicType', 'children': [19], 'value': 'double'}, {'id': 8, 'type': 'BinaryOperation', 'children': [9, 10, 20], 'value': '<'}, {'id': 9, 'type': 'MethodInvocation', 'children': [11, 21], 'value': 'Math.abs'}, {'id': 10, 'type': 'Literal', 'children': [22], 'value': '0.001'}, {'id': 11, 'type': 'BinaryOperation', 'children': [12, 13, 23], 'value': '-'}, {'id': 12, 'type': 'MemberReference', 'children': [24], 'value': 'value'}, {'id': 13, 'type': 'MemberReference', 'children': [25], 'value': 'valueToCompare'}, {'id': 14, 'value': 'isDoubleEqual'}, {'id': 15, 'value': 'boolean'}, {'id': 16, 'value': 'value'}, {'id': 17, 'value': 'valueToCompare'}, {'id': 18, 'value': 'double'}, {'id': 19, 'value': 'double'}, {'id': 20, 'value': '<'}, {'id': 21, 'value': 'Math.abs'}, {'id': 22, 'value': '0.001'}, {'id': 23, 'value': '-'}, {'id': 24, 'value': 'value'}, {'id': 25, 'value': 'valueToCompare'}]
-    print(get_NCS(['python2']))
+    # get_DFG(['python2', 'java'])
+    get_NCS(['python2'])
