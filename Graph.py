@@ -122,13 +122,13 @@ def add_value_node(node_seqs):
         new_node_seqs.append(new_node_seq)
     return new_node_seqs
 
-def get_node_seqs_with_value(lang):
+def get_node_seqs_with_value(lang, prefix):
     assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
     for l in lang:
-        for cat in ['train', 'valid', 'test']:
-            c = load(f'./data/{l}/processed/node_seqs.{cat}.json', is_json=True)
+        for cat in prefix:
+            c = load(f'./data/{l}/graph/node_seqs.{cat}.json', is_json=True)
             c = add_value_node(c)
-            save(c, f'./data/{l}/processed/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
+            save(c, f'./data/{l}/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
 
 
 # get data flow control
@@ -280,8 +280,11 @@ def get_python2_DFG(node_seqs):
         # extract the flow of `Assignment`
         for assign in assignments:
             # assignment has two variables
-            trg_var_idx = assign[3][0]
-            src_var_idx = assign[3][1]
+            try:
+                trg_var_idx = assign[3][0]
+                src_var_idx = assign[3][1]
+            except:
+                continue
             # print(trg_var_idx, src_var_idx)
             # find the target node
             # example: (x, y) = ..., `(x, y)` is the `TupleStore` target node, it has two children
@@ -310,16 +313,16 @@ def get_python2_DFG(node_seqs):
     return edge_index_seq
 
 # first run `get_node_seqs_with_value()` to get node sequences with value leaves
-def get_DFG(lang):
+def get_DFG(lang, prefix):
     assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
     if 'java' in lang:
-        for cat in ['train', 'valid', 'test']:
+        for cat in prefix:
             c = load(f'./data/java/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             d = get_java_DFG(c)
             save(d, f'./data/java/graph/dfg/dfg.{cat}.json', is_json=False)
 
     if 'python2' in lang:
-        for cat in ['train', 'valid', 'test']:
+        for cat in prefix:
             c_ = load(f'./data/python2/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             d_ = get_python2_DFG(c_)
             save(d_, f'./data/python2/graph/dfg/dfg.{cat}.json', is_json=False)
@@ -345,10 +348,10 @@ def ncs_pre_traverse(tree, idx):
     return result
 
 # first run `get_node_seqs_with_value()` to get node sequences with value leaves
-def get_NCS(lang):
+def get_NCS(lang, prefix):
     assert isinstance(lang, list or tuple), "language should be ['java', 'python2']"
     if 'java' in lang:
-        for cat in ['test', 'train', 'valid']:
+        for cat in prefix:
             node_seqs = load(f'./data/java/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             nature_code_seqs = []
             for node_seq in node_seqs:
@@ -376,7 +379,7 @@ def get_NCS(lang):
                 nature_code_seqs.append(nature_code_seq)
             save(nature_code_seqs, f'data/java/graph/ncs/ncs.{cat}.json', is_json=False)
     elif 'python2' in lang:
-        for cat in ['test', 'train', 'valid']:
+        for cat in prefix:
             node_seqs = load(f'./data/python2/graph/node_seqs_value/node_seqs_value.{cat}.json', is_json=True)
             nature_code_seqs = []
             for node_seq in node_seqs:
@@ -390,6 +393,6 @@ def get_NCS(lang):
 
 
 if __name__ == '__main__':
-    # get_node_seqs_with_value(['python2'])
-    # get_DFG(['python2', 'java'])
-    get_NCS(['python2'])
+    get_node_seqs_with_value(['python2'], prefix=['train', 'valid', 'test'])
+    get_DFG(lang=['python2'], prefix=['train', 'valid', 'test'])
+    get_NCS(lang=['python2'], prefix=['train', 'valid', 'test'])
