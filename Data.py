@@ -123,21 +123,23 @@ def get_vocab_field(lang):
 
 
 class ASTGraphDataset(InMemoryDataset):
-    def __init__(self, root, transform=None, pre_transform=None):
-        super(ASTGraphDataset, self).__init__(root, transform, pre_transform)
-        self.data, self.slices = torch.load(self.processed_paths[0])
+    def __init__(self, root):
+        super(ASTGraphDataset, self).__init__(root)
+        self.data = torch.load(self.processed_paths[0])
 
     @property
     def processed_file_names(self):
-        return ['train.python2_graph.pt']
+        # edit the prefix
+        return ['test.graph_dataset.pt']
 
     def process(self):
+        # choose language and prefix
         lang = 'python2'
-        category = 'train'
-        node_seqs = load(f'./data/{lang}/graph/node_seqs_value/node_seqs_value.{category}.json', is_json=True)
-        dfg_seqs = load(f'./data/{lang}/graph/dfg/dfg.{category}.json', is_json=False)
-        ncs_seqs = load(f'./data/{lang}/graph/ncs/ncs.{category}.json', is_json=False)
-        nl_seqs = load(f'./data/{lang}/raw/{category}.json', is_json=True, key='comment')
+        prefix = 'test'
+        node_seqs = load(f'./data/{lang}/graph/node_seqs_value/node_seqs_value.{prefix}.json', is_json=True)
+        dfg_seqs = load(f'./data/{lang}/graph/dfg/dfg.{prefix}.json', is_json=False)
+        ncs_seqs = load(f'./data/{lang}/graph/ncs/ncs.{prefix}.json', is_json=False)
+        nl_seqs = load(f'./data/{lang}/raw/{prefix}.json', is_json=True, key='comment')
         node_type_field = torch.load(f'./data/{lang}/processed/node_field.pkl')
         nl_field = torch.load(f'./data/{lang}/processed/nl_field.pkl')
 
@@ -183,26 +185,19 @@ class ASTGraphDataset(InMemoryDataset):
                         edge_attr.append([0, 0, 1])
                     elif ncs in edge_index:
                         edge_attr[edge_index.index(ncs)][2] = 1
-            try:
-                data = Data(x=node_type_field.process(nodes),
-                            edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
-                            edge_attr=torch.IntTensor(edge_attr),
-                            y=nl_field.process([nl_seq]).squeeze(0))
-                data_list.append(data)
-            except:
-                continue
-        print(data_list[0], data_list[1])
+            data = Data(x=node_type_field.process(nodes),
+                        edge_index=torch.tensor(edge_index, dtype=torch.long).t().contiguous(),
+                        edge_attr=torch.IntTensor(edge_attr),
+                        y=nl_field.process([nl_seq]).squeeze(0))
+            data_list.append(data)
         # save data
         torch.save(data_list, self.processed_paths[0])
 
 if __name__ == '__main__':
-    # get_vocab_field(['java', 'python2'])
-    # a = torch.load(f'./data/field/java_nl_field.pkl')
-    # print(a.process([['MethodDeclaration', 'FormalParameter'], ['create', 'b']]))
-    # a = torch.load(f'./data/field/java_node_field.pkl')
-    # print(a.process([['MethodDeclaration', 'FormalParameter'], ['create', 'b']]))
-    # ast_graph = ASTGraphDataset('data')
-    graph = torch.load('./data/processed/train.python2_graph.pt')
-    print(len(graph))
-    print(graph[0], graph[1])
+    lang = ['python2', 'python']
+    get_vocab_field(lang)
+    for l in lang:
+        # a = torch.load(f'./data/{l}/processed/nl_field.pkl')
+        # print(a.process([['MethodDeclaration', 'FormalParameter'], ['create', 'b']]))
+        graph = ASTGraphDataset(f'data/{l}')
 
