@@ -128,10 +128,7 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-data/cpg
-data/joern
-data/processed/*
-data/raw
+data/
 joern/
 test*
 Data.ipynb
